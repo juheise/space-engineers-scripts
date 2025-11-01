@@ -1,0 +1,133 @@
+// --- BATTERY MONITOR SCRIPT ---
+// Displays the combined charge, input, and output of all batteries
+// that have the specified tag in their Custom Data.
+
+// --- CONFIGURATION ---
+const string MONITOR_TAG = "monitored=true";
+const int RESCAN_INTERVAL_RUNS = 6; // Rescans roughly every 10 seconds.
+const string DISPLAY_BLOCK_NAME = "Control Seat (Nomad)"; // any cockpit, console, or LCD name
+const int SURFACE_INDEX = 4; // which built-in screen to use
+
+// --- UI CONFIGURATION ---
+// --- Colors (R, G, B, Alpha) ---
+readonly Color BG_COLOR = new Color(10, 25, 35, 255);       // Panel background color
+readonly Color BAR_BG_COLOR = new Color(0, 0, 0, 150);         // Progress bar background
+readonly Color CHARGE_COLOR = new Color(120, 190, 40, 255);    // Green
+readonly Color INPUT_COLOR = new Color(40, 120, 190, 255);     // Blue
+readonly Color OUTPUT_COLOR = new Color(190, 120, 40, 255);    // Orange
+readonly Color TEXT_COLOR = new Color(200, 230, 250, 255);    // Light blue text
+readonly Color HEADER_COLOR = Color.White;
+
+// --- Layout ---
+const float FONT_SIZE = 1.3f;
+const float HEADER_FONT_SIZE = 1.8f;
+const float BAR_HEIGHT = 30f; // Height of the progress bars in pixels
+const float PADDING = 25f;    // Padding from the edges of the screen
+
+// --- SCRIPT STATE (DO NOT MODIFY) ---
+private readonly List<IMyBatteryBlock> _monitoredBatteries = new List<IMyBatteryBlock>();
+private int _runCounter = RESCAN_INTERVAL_RUNS;
+
+public Program()
+{
+    Runtime.UpdateFrequency = UpdateFrequency.Update100;
+}
+
+public void Main(string argument, UpdateType updateSource)
+{
+    _runCounter++;
+    if (_runCounter >= RESCAN_INTERVAL_RUNS || argument.ToLower() == "rescan")
+    {
+        RescanBatteries();
+    }
+
+    IMyTerminalBlock block = GridTerminalSystem.GetBlockWithName(DISPLAY_BLOCK_NAME);
+    if (block == null)
+    {
+        Echo($"Error: No block named '{DISPLAY_BLOCK_NAME}' found!");
+        return;
+    }
+
+    // Try to get a text surface provider (LCD, cockpit, console, etc.)
+    IMyTextSurfaceProvider provider = block as IMyTextSurfaceProvider;
+    if (provider == null)
+    {
+        Echo($"ERROR: the block '{DISPLAY_BLOCK_NAME}' has no LCD surfaces!");
+        return;
+    }
+    IMyTextSurface lcd = provider.GetSurface(SURFACE_INDEX);
+
+    // --- AGGREGATE CALCULATIONS ---
+    float totalStored = 0f, totalMaxStored = 0f, totalInput = 0f;
+    float totalMaxInput = 0f, totalOutput = 0f, totalMaxOutput = 0f;
+
+    if (_monitoredBatteries.Count > 0)
+    {
+        foreach (IMyBatteryBlock battery in _monitoredBatteries)
+        {
+            if (battery.Closed) continue;
+            totalStored += battery.CurrentStoredPower;
+            totalMaxStored += battery.MaxStoredPower;
+            totalInput += battery.CurrentInput;
+            totalMaxInput += battery.MaxInput;
+            totalOutput += battery.CurrentOutput;
+            totalMaxOutput += battery.MaxOutput;
+        }
+    }
+
+    // --- DRAWING ---
+    DrawUI(lcd, totalStored, totalMaxStored, totalInput, totalMaxInput, totalOutput, totalMaxOutput);
+
+    Echo("Script ran successfully.");
+    Echo($"Monitoring {_monitoredBatteries.Count} cached batteries.");
+}
+
+void DrawUI(IMyTextSurface lcd, float stored, float maxStored, float input, float maxInput, float output, float maxOutput)
+{
+    // Set up display for text mode
+    lcd.ContentType = ContentType.TEXT_AND_IMAGE;
+    lcd.Font = "Monospace";
+    float fontScale = Math.Max(0.6f, 1.5f - (lcd.SurfaceSize.Y / 512f));
+    lcd.FontSize = fontScale;
+    lcd.FontColor = new Color(0, 255, 0);
+    lcd.Alignment = TextAlignment.LEFT;
+
+    // Compute percentages safely
+    float chargePct = (maxStored > 0) ? (stored / maxStored) * 100f : 0f;
+    float inputPct = (maxInput > 0) ? (input / maxInput) * 100f : 0f;
+    float outputPct = (maxOutput > 0) ? (output / maxOutput) * 100f : 0f;
+
+    // Build text output
+    StringBuilder sb = new StringBuilder();
+    sb.AppendLine("=== Battery Status ===");
+    sb.AppendLine($"In:     {inputPct,5:F1}%");
+    sb.AppendLine($"Out:    {outputPct,5:F1}%");
+    sb.AppendLine($"Charge: {chargePct,5:F1}%");
+
+    if (_monitoredBatteries.Count == 0)
+    {
+        sb.AppendLine();
+        sb.AppendLine("No monitored batteries found!");
+        sb.AppendLine($"Tag with '{MONITOR_TAG}'");
+    }
+
+    // Display on LCD
+    lcd.WriteText(sb.ToString());
+}
+
+void RescanBatteries()
+{
+    Echo("Rescanning for tagged batteries...");
+    _monitoredBatteries.Clear();
+    List<IMyBatteryBlock> allBatteries = new List<IMyBatteryBlock>();
+    GridTerminalSystem.GetBlocksOfType(allBatteries);
+    foreach (IMyBatteryBlock battery in allBatteries)
+    {
+        if (battery.CustomData.Contains(MONITOR_TAG))
+        {
+            _monitoredBatteries.Add(battery);
+        }
+    }
+    Echo($"Scan complete. Found {_monitoredBatteries.Count} batteries.");
+    _runCounter = 0;
+}
